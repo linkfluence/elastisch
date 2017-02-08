@@ -11,7 +11,6 @@
 ;; WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 ;; See the License for the specific language governing permissions and
 ;; limitations under the License.
-
 (ns clojurewerkz.elastisch.native.bulk
   (:refer-clojure :exclude [get replace count sort])
   (:require [clojurewerkz.elastisch.native :as native]
@@ -22,6 +21,7 @@
             [clojurewerkz.elastisch.common.bulk :as common-bulk])
   (:import clojure.lang.IPersistentMap
            org.elasticsearch.client.Client
+           org.elasticsearch.action.WriteConsistencyLevel
            org.elasticsearch.action.bulk.BulkRequest
            org.elasticsearch.action.bulk.BulkRequestBuilder
            org.elasticsearch.action.bulk.BulkResponse
@@ -50,27 +50,40 @@
     (update-in doc [action] #(merge default %))
     doc))
 
+(defn ->consistency-level
+  [lvl]
+  (condp = (name lvl)
+    "all" WriteConsistencyLevel/ALL
+    "one" WriteConsistencyLevel/ONE
+    "quorum" WriteConsistencyLevel/QUORUM
+    WriteConsistencyLevel/DEFAULT))
+
 (defn bulk
   "Performs a bulk operation"
-  [^Client conn operations & params]
-  (let [^BulkRequestBuilder req (reduce #(add-operation %2 %1) (.prepareBulk conn)
-                                        (cnv/->action-requests operations))]
-    (when (:refresh (first (flatten params)))
-      (.setRefresh req true))
-    (-> req
-        .execute
-        ^BulkResponse .actionGet
-        cnv/bulk-response->map)))
+  ([^Client conn operations & {:keys [refresh consistency-level]
+                               :or {refresh false
+                                    consistency-level :default}}]
+   (let [^BulkRequestBuilder req (reduce #(add-operation %2 %1) (.prepareBulk conn)
+                                         (cnv/->action-requests operations))]
+     (when refresh
+       (.setRefresh req true))
+     (.setConsistencyLevel req (->consistency-level consistency-level))
+     (-> req
+         .execute
+         ^BulkResponse .actionGet
+         cnv/bulk-response->map))))
 
 (defn bulk-with-index
   "Performs a bulk operation defaulting to the index specified"
   [^Client conn index operations & params]
-  (bulk conn (map #(add-default % {:_index index}) operations) params))
+  (apply bulk conn (map #(add-default % {:_index index}) operations) params))
 
 (defn bulk-with-index-and-type
   "Performs a bulk operation defaulting to the index and type specified"
   [^Client conn index mapping-type operations & params]
-  (bulk conn (map #(add-default % {:_index index :_type mapping-type}) operations) params))
+  (apply bulk conn
+         (map #(add-default % {:_index index :_type mapping-type}) operations)
+         params))
 
 (def index-operation common-bulk/index-operation)
 
